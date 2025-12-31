@@ -21,6 +21,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 尝试导入 unsloth.chat_templates，如果不存在则忽略
+try:
+    from unsloth.chat_templates import get_chat_template, CHAT_TEMPLATES
+    HAS_CHAT_TEMPLATES = True
+except ImportError:
+    HAS_CHAT_TEMPLATES = False
+    CHAT_TEMPLATES = None
+    logger.warning("无法导入 unsloth.chat_templates，chat_template_name 参数将不可用")
+
 
 @dataclass
 class LoRAConfig:
@@ -75,6 +84,9 @@ class TrainingConfig:
     save_total_limit: Optional[int] = None  # 保存的检查点数量限制
     max_samples: Optional[int] = None  # 限制训练样本数量，用于快速测试
     shuffle_seed: Optional[int] = None  # 数据打乱种子，None则使用seed
+    use_chat_template: bool = False  # 是否使用模型的 chat template 处理数据
+    messages_field: str = "messages"  # 数据集中包含消息列表的字段名，仅在 use_chat_template=True 时使用
+    chat_template_name: Optional[str] = None  # Chat template 名称（用于 unsloth.chat_templates.get_chat_template），None则使用模型默认
 
 
 class UnslothTrainer:
@@ -168,6 +180,27 @@ class UnslothTrainer:
                 loftq_config=self.lora_config.loftq_config,
             )
             
+            # 如果指定了 chat_template_name，使用 unsloth 的 get_chat_template 设置
+            if self.training_config.chat_template_name is not None:
+                if not HAS_CHAT_TEMPLATES:
+                    logger.warning("无法使用 unsloth.chat_templates.get_chat_template，将使用模型默认的 chat template")
+                else:
+                    # 检查 chat_template_name 是否在 CHAT_TEMPLATES 中
+                    available_templates = list(CHAT_TEMPLATES.keys())
+                    if self.training_config.chat_template_name in available_templates:
+                        logger.info(f"正在设置 chat template: {self.training_config.chat_template_name}")
+                        self.tokenizer = get_chat_template(
+                            self.tokenizer,
+                            chat_template=self.training_config.chat_template_name
+                        )
+                        logger.info("Chat template 设置完成")
+                    else:
+                        logger.warning(
+                            f"指定的 chat_template_name '{self.training_config.chat_template_name}' "
+                            f"不在可用的模板列表中。可用的模板: {available_templates}。"
+                            f"将使用模型默认的 chat template"
+                        )
+            
             self._is_loaded = True
             logger.info("模型加载完成")
             
@@ -204,6 +237,59 @@ class UnslothTrainer:
         
         logger.info(f"正在加载数据集: {dataset_path}")
         dataset = load_dataset('json', data_files=dataset_path)['train']
+        
+        # 如果启用 chat template，使用模型的 chat template 处理数据
+        if self.training_config.use_chat_template:
+            if not self._is_loaded:
+                raise RuntimeError("使用 chat template 需要先加载模型，请先调用 load_model()")
+            
+            logger.info(f"正在使用模型的 chat template 处理数据集（messages字段: {self.training_config.messages_field}）...")
+            
+            # 检查 chat template 是否存在
+            if self.tokenizer.chat_template is None:
+                raise ValueError("模型没有定义 chat_template，无法处理数据。请检查模型配置或设置 chat_template_name")
+            
+            # 定义格式化函数
+            def formatting_prompts_func(examples):
+                """使用 chat template 格式化消息"""
+                messages_field = self.training_config.messages_field
+                
+                # 获取消息列表
+                if messages_field not in examples:
+                    raise ValueError(f"数据集中缺少 '{messages_field}' 字段")
+                
+                convos = examples[messages_field]
+                
+                # 处理每个对话
+                texts = []
+                for convo in convos:
+                    if not isinstance(convo, list):
+                        raise ValueError(f"'{messages_field}' 字段必须是消息列表")
+                    
+                    # 验证消息格式
+                    for i, msg in enumerate(convo):
+                        if not isinstance(msg, dict):
+                            raise ValueError(f"第 {i+1} 条消息必须是字典格式")
+                        if "role" not in msg or "content" not in msg:
+                            raise ValueError(f"第 {i+1} 条消息必须包含 'role' 和 'content' 字段")
+                    
+                    # 使用 chat template 格式化
+                    text = self.tokenizer.apply_chat_template(
+                        convo,
+                        tokenize=False,
+                        add_generation_prompt=False
+                    )
+                    texts.append(text)
+                
+                return {self.training_config.dataset_text_field: texts}
+            
+            # 应用格式化函数
+            dataset = dataset.map(
+                formatting_prompts_func,
+                batched=True,
+                desc="使用 chat template 处理数据"
+            )
+            logger.info("Chat template 处理完成")
         
         # 限制样本数量（用于快速测试）
         if not is_eval and self.training_config.max_samples:
@@ -522,7 +608,8 @@ def create_training_config_from_dict(config_dict: Dict[str, Any]) -> TrainingCon
         'eval_dataset_path', 'dataset_text_field', 'per_device_eval_batch_size',
         'evaluation_strategy', 'eval_steps', 'save_strategy', 'save_steps',
         'load_best_model_at_end', 'metric_for_best_model', 'greater_is_better',
-        'save_total_limit', 'max_samples', 'shuffle_seed'
+        'save_total_limit', 'max_samples', 'shuffle_seed',
+        'use_chat_template', 'messages_field', 'chat_template_name'
     ]
     for field in optional_fields:
         if field in train_dict:

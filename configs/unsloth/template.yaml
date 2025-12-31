@@ -164,6 +164,26 @@ training:
                                     # 说明: SFTTrainer会使用此字段的内容进行训练
                                     # 注意: 数据集中的JSON对象必须包含此字段
 
+  use_chat_template: false          # 可选: 是否使用模型的 chat template 处理数据
+                                    # 默认值: false
+                                    # 说明: 如果为true，数据集应包含messages字段（由messages_field指定），
+                                    #       训练时会使用模型的chat_template将messages转换为text字段
+                                    # 注意: 启用此选项时，需要先加载模型（在run_full_pipeline中会自动处理）
+                                    # 可选值: true, false
+
+  messages_field: "messages"        # 可选: 数据集中包含消息列表的字段名
+                                    # 默认值: "messages"
+                                    # 说明: 仅在use_chat_template=true时使用
+                                    #       数据集中的JSON对象应包含此字段，格式为消息列表：
+                                    #       [{"role": "user", "content": "What is 1+1?"}, 
+                                    #        {"role": "assistant", "content": "It's 2!"}]
+
+  chat_template_name: null          # 可选: Chat template 名称（用于 unsloth.chat_templates.get_chat_template）
+                                    # 默认值: null（使用模型默认的 chat template）
+                                    # 说明: 如果指定，将使用 unsloth 的 get_chat_template 设置 chat template
+                                    #       示例: "gemma-3", "qwen", "llama-3" 等
+                                    #       注意: 需要确保 unsloth 支持该 chat template 名称
+
   # 批次配置（可选）
   per_device_eval_batch_size: null  # 可选: 每个设备的验证批次大小
                                     # 默认值: null（使用per_device_train_batch_size的值）
@@ -218,4 +238,5 @@ training:
   shuffle_seed: null                # 可选: 数据打乱种子
                                     # 默认值: null（使用seed的值）
                                     # 说明: 用于控制数据集的打乱顺序，确保结果可复现
+
 

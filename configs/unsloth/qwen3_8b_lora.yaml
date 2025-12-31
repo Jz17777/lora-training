@@ -35,6 +35,11 @@ training:
   eval_dataset_path: '/root/autodl-tmp/ft_splits/val.jsonl'  # 验证集路径，null表示不使用验证集
   dataset_text_field: "text"  # SFTTrainer需要的文本字段名
   
+  # Chat Template 配置
+  use_chat_template: false  # 是否使用模型的 chat template 处理数据（默认: false）
+  messages_field: "messages"  # 数据集中包含消息列表的字段名（默认: "messages"）
+  chat_template_name: null  # Chat template 名称（用于 unsloth.chat_templates.get_chat_template），null则使用模型默认
+  
   # 批次和梯度配置
   per_device_train_batch_size: 2  # 每个设备的训练批次大小
   per_device_eval_batch_size: 2  # 每个设备的验证批次大小，null则使用训练批次大小
