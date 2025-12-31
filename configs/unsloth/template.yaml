@@ -1,0 +1,221 @@
+# =============================================================================
+# Unsloth LoRA 训练配置模板
+# =============================================================================
+# 使用方法：
+# 1. 复制此文件为新配置文件（如：my_config.yaml）
+# 2. 根据实际需求修改配置参数
+# 3. 运行训练：bash scripts/run_unsloth.sh configs/unsloth/my_config.yaml
+# =============================================================================
+
+# =============================================================================
+# 基础配置（必需）
+# =============================================================================
+model_path: '/path/to/your/model'  # 必需: 基础模型路径（本地路径或HuggingFace模型名称）
+                                    # 示例: '/root/models/Qwen3-8B' 或 'Qwen/Qwen3-8B'
+
+output_path: '/path/to/output'     # 必需: 训练后模型的保存路径
+                                    # 示例: '/root/autodl-tmp/my_lora_adapter'
+
+max_seq_length: 2048                # 必需: 最大序列长度，影响显存占用和训练速度
+                                    # 建议: 根据GPU显存调整，常见值: 512, 1024, 2048, 4096
+
+load_in_4bit: true                  # 必需: 是否使用4bit量化加载模型
+                                    # 推荐: true（可大幅减少显存占用，约减少75%显存）
+                                    # 可选值: true, false
+
+load_in_8bit: false                 # 必需: 是否使用8bit量化加载模型
+                                    # 注意: load_in_4bit 和 load_in_8bit 只能选择一个为true
+                                    # 推荐: load_in_4bit=true, load_in_8bit=false
+                                    # 可选值: true, false
+
+device_map: 'auto'                  # 必需: 设备映射方式
+                                    # 可选值: 'auto'（自动）, 'cuda:0'（指定GPU）, 'cpu'等
+
+# =============================================================================
+# 基础配置（可选）
+# =============================================================================
+dtype: null                         # 可选: 数据类型，null表示自动选择
+                                    # 可选值: null（自动）, 'float16', 'bfloat16', 'float32'
+                                    # 注意: 通常使用null让系统自动选择即可
+
+# =============================================================================
+# LoRA配置
+# =============================================================================
+lora:
+  # 必需参数
+  r: 16                             # 必需: LoRA的rank（低秩矩阵的秩）
+                                    # 常用值: 8, 16, 32, 64, 128
+                                    # 说明: 值越大参数量越多，拟合能力越强，但显存占用也越多
+                                    # 推荐: 8-32之间，16是一个很好的平衡点
+
+  lora_alpha: 16                    # 必需: LoRA的alpha参数（缩放因子）
+                                    # 建议: 通常设置为r的值或r*2
+                                    # 说明: alpha/r的比例影响LoRA的强度，常用比例是1或2
+
+  lora_dropout: 0                   # 必需: LoRA的dropout率
+                                    # 推荐: 0（通常0是最优值）
+                                    # 可选值: 0.0 - 1.0之间的浮点数
+
+  # 可选参数
+  target_modules:                   # 可选: 目标模块列表，指定哪些层应用LoRA
+    - "q_proj"                      # 如果不设置或设置为null，将使用默认值：
+    - "k_proj"                      # ["q_proj", "k_proj", "v_proj", "o_proj",
+    - "v_proj"                      #  "gate_proj", "up_proj", "down_proj"]
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+                                    # 说明: 不同模型架构的模块名可能不同
+                                    # 常见模块: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+
+  bias: "none"                      # 可选: 偏置参数的处理方式
+                                    # 可选值: "none"（不训练偏置）, "all"（训练所有偏置）, "lora_only"（只训练LoRA偏置）
+                                    # 默认值: "none"
+
+  use_gradient_checkpointing: "unsloth"  # 可选: 梯度检查点策略
+                                         # 可选值: "unsloth"（推荐，可减少约30%显存占用）, "true", "false"
+                                         # 默认值: "unsloth"
+                                         # 说明: 使用梯度检查点可以降低显存占用，但会增加计算时间
+
+  random_state: 42                  # 可选: 随机种子，用于LoRA权重初始化
+                                    # 默认值: 42
+                                    # 说明: 固定种子可以确保结果可复现
+
+  use_rslora: false                 # 可选: 是否使用rank stabilized LoRA
+                                    # 可选值: true, false
+                                    # 默认值: false
+                                    # 说明: RSLoRA是一种改进的LoRA变体，在某些情况下效果更好
+
+  loftq_config: null                # 可选: LoftQ配置（用于量化感知的LoRA初始化）
+                                    # 默认值: null（不使用）
+                                    # 说明: 高级功能，通常不需要设置
+
+# =============================================================================
+# 训练配置（必需参数）
+# =============================================================================
+training:
+  # 数据集配置
+  dataset_path: '/path/to/train.jsonl'  # 必需: 训练集路径（JSONL格式）
+                                         # 格式要求: 每行一个JSON对象，必须包含"text"字段（或dataset_text_field指定的字段）
+                                         # 示例: {"text": "训练文本内容..."}
+
+  # 批次和梯度配置
+  per_device_train_batch_size: 2    # 必需: 每个设备的训练批次大小
+                                    # 说明: 影响显存占用和训练速度
+                                    # 建议: 根据GPU显存调整，常见值: 1, 2, 4, 8, 16
+
+  gradient_accumulation_steps: 1    # 必需: 梯度累积步数
+                                    # 说明: 有效批次大小 = per_device_train_batch_size * gradient_accumulation_steps * num_gpus
+                                    # 用途: 当显存不足时，可以通过梯度累积模拟更大的批次大小
+
+  # 训练超参数
+  num_train_epochs: 4               # 必需: 训练轮数（epochs）
+                                    # 说明: 训练数据完整遍历的次数
+                                    # 建议: 根据数据集大小调整，常用值: 1-10
+
+  learning_rate: 2.0e-4             # 必需: 学习率
+                                    # 常用值: 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4
+                                    # 建议: 从2e-4开始，根据训练情况调整
+                                    # 格式: 科学计数法（如 2.0e-4）或小数（如 0.0002）
+
+  warmup_steps: 0                   # 必需: 预热步数
+                                    # 说明: 学习率从0线性增加到设定值所需的步数
+                                    # 建议: 通常设置为总步数的5-10%，或固定值如10、50、100
+
+  weight_decay: 0.01                # 必需: 权重衰减（L2正则化系数）
+                                    # 常用值: 0.0, 0.01, 0.1
+                                    # 说明: 防止过拟合，0.01是一个常用的默认值
+
+  lr_scheduler_type: "cosine"       # 必需: 学习率调度器类型
+                                    # 可选值: "linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"
+                                    # 推荐: "cosine"（余弦退火）或 "linear"（线性衰减）
+
+  optim: "adamw_8bit"               # 必需: 优化器类型
+                                    # 可选值: "adamw_8bit"（推荐，节省显存）, "adamw_torch", "adamw_bnb_8bit", "sgd"
+                                    # 说明: 8bit优化器可以减少显存占用
+
+  # 日志配置
+  logging_steps: 1                  # 必需: 日志输出步数间隔
+                                    # 说明: 每训练多少步输出一次日志
+                                    # 建议: 1（每次训练步都输出）或更大值（如10, 50）
+
+  logging_strategy: "steps"         # 必需: 日志策略
+                                    # 可选值: "no"（不输出）, "steps"（按步数）, "epoch"（按轮数）
+
+  report_to: "none"                 # 必需: 日志报告工具
+                                    # 可选值: "none"（不报告）, "wandb"（Weights & Biases）, "tensorboard"
+                                    # 说明: 如果使用wandb，需要先安装并登录: pip install wandb && wandb login
+
+  seed: 3407                        # 必需: 随机种子
+                                    # 说明: 用于控制数据打乱、权重初始化等的随机性
+                                    # 建议: 固定值以确保结果可复现
+
+# =============================================================================
+# 训练配置（可选参数）
+# =============================================================================
+  # 数据集配置（可选）
+  eval_dataset_path: null           # 可选: 验证集路径（JSONL格式），null表示不使用验证集
+                                    # 格式要求: 与训练集相同，必须包含"text"字段
+                                    # 示例: '/path/to/val.jsonl'
+                                    # 注意: 如果设置了验证集，建议同时设置evaluation_strategy
+
+  dataset_text_field: "text"        # 可选: 数据集中的文本字段名
+                                    # 默认值: "text"
+                                    # 说明: SFTTrainer会使用此字段的内容进行训练
+                                    # 注意: 数据集中的JSON对象必须包含此字段
+
+  # 批次配置（可选）
+  per_device_eval_batch_size: null  # 可选: 每个设备的验证批次大小
+                                    # 默认值: null（使用per_device_train_batch_size的值）
+                                    # 说明: 验证时通常可以使用更大的批次大小
+
+  # 评估和保存策略（可选）
+  evaluation_strategy: null         # 可选: 评估策略
+                                    # 可选值: "no"（不评估）, "steps"（按步数）, "epoch"（按轮数）
+                                    # 默认值: null（如果有验证集则为"epoch"，否则为"no"）
+                                    # 说明: 只有在设置了eval_dataset_path时才建议设置此参数
+
+  eval_steps: null                  # 可选: 评估步数间隔（仅在evaluation_strategy="steps"时需要设置）
+                                    # 说明: 每训练多少步进行一次评估
+                                    # 示例: 100（每100步评估一次）
+
+  save_strategy: null               # 可选: 模型保存策略
+                                    # 可选值: "no"（不保存）, "steps"（按步数）, "epoch"（按轮数）
+                                    # 默认值: null（如果有验证集则为"epoch"，否则为"steps"）
+                                    # 说明: 训练过程中会定期保存检查点
+
+  save_steps: null                  # 可选: 保存步数间隔（仅在save_strategy="steps"时需要设置）
+                                    # 说明: 每训练多少步保存一次检查点
+                                    # 示例: 500（每500步保存一次）
+
+  # 最佳模型配置（可选，需要验证集）
+  load_best_model_at_end: true      # 可选: 训练结束时是否加载最佳模型（基于验证集指标）
+                                    # 默认值: true
+                                    # 说明: 只有设置了验证集时此参数才有意义
+                                    # 可选值: true, false
+
+  metric_for_best_model: "eval_loss"  # 可选: 用于选择最佳模型的指标
+                                      # 默认值: "eval_loss"
+                                      # 说明: 选择验证集上指标最好的模型
+                                      # 常见值: "eval_loss"（损失越低越好）, "eval_accuracy"（准确率越高越好）等
+
+  greater_is_better: false          # 可选: 指标是否越大越好
+                                    # 默认值: false
+                                    # 说明: true表示指标越大越好（如准确率），false表示指标越小越好（如损失）
+                                    # 示例: eval_loss应该设置为false，eval_accuracy应该设置为true
+
+  save_total_limit: null            # 可选: 最多保存的检查点数量
+                                    # 默认值: null（不限制，保存所有检查点）
+                                    # 说明: 设置为数字（如3）时，只保留最新的N个检查点，删除旧的以节省磁盘空间
+                                    # 建议: 根据磁盘空间设置，通常3-5个检查点足够
+
+  # 其他配置（可选）
+  max_samples: null                 # 可选: 限制训练样本数量，用于快速测试
+                                    # 默认值: null（使用全部数据）
+                                    # 说明: 设置为数字（如100）时，只使用前N个样本进行训练
+                                    # 用途: 用于快速测试配置是否正常工作，正式训练时应设为null
+
+  shuffle_seed: null                # 可选: 数据打乱种子
+                                    # 默认值: null（使用seed的值）
+                                    # 说明: 用于控制数据集的打乱顺序，确保结果可复现
+
