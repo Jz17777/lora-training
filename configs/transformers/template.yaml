@@ -1,10 +1,10 @@
 # =============================================================================
-# Unsloth LoRA 训练配置模板
+# Transformers LoRA 训练配置模板
 # =============================================================================
 # 使用方法：
 # 1. 复制此文件为新配置文件（如：my_config.yaml）
 # 2. 根据实际需求修改配置参数
-# 3. 运行训练：bash scripts/run_unsloth.sh configs/unsloth/my_config.yaml
+# 3. 运行训练：bash scripts/run_transformers.sh configs/transformers/my_config.yaml
 # =============================================================================
 
 # =============================================================================
@@ -37,6 +37,12 @@ device_map: 'auto'                  # 必需: 设备映射方式
 dtype: null                         # 可选: 数据类型，null表示自动选择
                                     # 可选值: null（自动）, 'float16', 'bfloat16', 'float32'
                                     # 注意: 通常使用null让系统自动选择即可
+
+attn_implementation: null           # 可选: 注意力实现方式
+                                    # 可选值: null（自动）, 'flash_attention_2', 'sdpa', 'eager'
+                                    # 说明: flash_attention_2 需要安装 flash-attn 库
+                                    #       sdpa 是 PyTorch 2.0+ 的 Scaled Dot Product Attention
+                                    #       eager 是传统的注意力实现
 
 # =============================================================================
 # LoRA配置
@@ -72,10 +78,10 @@ lora:
                                     # 可选值: "none"（不训练偏置）, "all"（训练所有偏置）, "lora_only"（只训练LoRA偏置）
                                     # 默认值: "none"
 
-  use_gradient_checkpointing: "unsloth"  # 可选: 梯度检查点策略
-                                         # 可选值: "unsloth"（推荐，可减少约30%显存占用）, "true", "false"
-                                         # 默认值: "unsloth"
-                                         # 说明: 使用梯度检查点可以降低显存占用，但会增加计算时间
+  use_gradient_checkpointing: true  # 可选: 是否使用梯度检查点
+                                    # 可选值: true, false
+                                    # 默认值: true
+                                    # 说明: 使用梯度检查点可以降低显存占用，但会增加计算时间
 
   random_state: 42                  # 可选: 随机种子，用于LoRA权重初始化
                                     # 默认值: 42
@@ -86,9 +92,9 @@ lora:
                                     # 默认值: false
                                     # 说明: RSLoRA是一种改进的LoRA变体，在某些情况下效果更好
 
-  loftq_config: null                # 可选: LoftQ配置（用于量化感知的LoRA初始化）
-                                    # 默认值: null（不使用）
-                                    # 说明: 高级功能，通常不需要设置
+  task_type: "CAUSAL_LM"            # 可选: 任务类型
+                                    # 可选值: "CAUSAL_LM"（因果语言模型）, "SEQ_2_SEQ_LM"（序列到序列）
+                                    # 默认值: "CAUSAL_LM"
 
 # =============================================================================
 # 训练配置（必需参数）
@@ -131,7 +137,7 @@ training:
                                     # 推荐: "cosine"（余弦退火）或 "linear"（线性衰减）
 
   optim: "adamw_8bit"               # 必需: 优化器类型
-                                    # 可选值: "adamw_8bit"（推荐，节省显存）, "adamw_torch", "adamw_bnb_8bit", "sgd"
+                                    # 可选值: "adamw_8bit"（推荐，节省显存）, "adamw_torch", "adamw_bnb_8bit", "sgd", "paged_adamw_8bit"
                                     # 说明: 8bit优化器可以减少显存占用
 
   # 日志配置
@@ -178,12 +184,6 @@ training:
                                     #       [{"role": "user", "content": "What is 1+1?"}, 
                                     #        {"role": "assistant", "content": "It's 2!"}]
 
-  chat_template_name: null          # 可选: Chat template 名称（用于 unsloth.chat_templates.get_chat_template）
-                                    # 默认值: null（使用模型默认的 chat template）
-                                    # 说明: 如果指定，将使用 unsloth 的 get_chat_template 设置 chat template
-                                    #       示例: "gemma-3", "qwen", "llama-3" 等
-                                    #       注意: 需要确保 unsloth 支持该 chat template 名称
-
   # 批次配置（可选）
   per_device_eval_batch_size: null  # 可选: 每个设备的验证批次大小
                                     # 默认值: null（使用per_device_train_batch_size的值）
@@ -229,6 +229,17 @@ training:
                                     # 说明: 设置为数字（如3）时，只保留最新的N个检查点，删除旧的以节省磁盘空间
                                     # 建议: 根据磁盘空间设置，通常3-5个检查点足够
 
+  # 混合精度训练配置
+  bf16: true                        # 可选: 是否使用 bf16 混合精度训练
+                                    # 默认值: true
+                                    # 说明: 推荐使用，需要 Ampere 及以上架构 GPU（如 A100, RTX 30xx, RTX 40xx）
+                                    # 注意: bf16 和 fp16 只能选择一个为 true
+
+  fp16: false                       # 可选: 是否使用 fp16 混合精度训练
+                                    # 默认值: false
+                                    # 说明: 如果 GPU 不支持 bf16，可以使用 fp16
+                                    # 注意: bf16 和 fp16 只能选择一个为 true
+
   # 其他配置（可选）
   max_samples: null                 # 可选: 限制训练样本数量，用于快速测试
                                     # 默认值: null（使用全部数据）
@@ -254,5 +265,3 @@ training:
                                     #       推荐值: 1.0（常用值），0.5（更保守），2.0（更宽松）
                                     #       适用场景: 训练不稳定、损失震荡、梯度爆炸时
                                     # 可选值: null（不裁剪）, 0.5, 1.0, 2.0 等正数
-
-

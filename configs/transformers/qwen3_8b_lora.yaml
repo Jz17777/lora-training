@@ -1,4 +1,4 @@
-# Unsloth LoRA 训练配置文件
+# Transformers LoRA 训练配置文件
 
 # ========== 基础配置（必需） ==========
 model_path: '/root/autodl-tmp/pretrained/Qwen/Qwen3-8B'  # 基础模型路径（本地路径或HuggingFace模型名称）
@@ -10,6 +10,7 @@ device_map: 'auto'  # 设备映射方式
 
 # ========== 基础配置（可选） ==========
 dtype: null  # 数据类型，null表示自动选择
+attn_implementation: null  # 注意力实现方式，如 "flash_attention_2"、"sdpa"、"eager"
 
 # ========== LoRA配置 ==========
 lora:
@@ -28,10 +29,10 @@ lora:
     - "up_proj"
     - "down_proj"
   bias: "none"  # 偏置参数
-  use_gradient_checkpointing: "unsloth"  # 使用unsloth的梯度检查点，可减少30%显存占用
+  use_gradient_checkpointing: true  # 是否使用梯度检查点，可减少显存占用
   random_state: 42  # 随机种子，用于LoRA权重初始化
   use_rslora: false  # 是否使用rank stabilized LoRA
-  loftq_config: null  # LoftQ配置
+  task_type: "CAUSAL_LM"  # 任务类型
 
 # ========== 训练配置（必需参数） ==========
 training:
@@ -63,9 +64,8 @@ training:
   dataset_text_field: "text"  # 数据集中的文本字段名
   
   # Chat Template 配置
-  use_chat_template: qwen3  # 是否使用模型的 chat template 处理数据
+  use_chat_template: false  # 是否使用模型的 chat template 处理数据
   messages_field: "messages"  # 数据集中包含消息列表的字段名
-  chat_template_name: null  # Chat template 名称（用于 unsloth.chat_templates.get_chat_template）
   
   # 批次配置（可选）
   per_device_eval_batch_size: 8  # 每个设备的验证批次大小，null则使用训练批次大小
@@ -81,6 +81,10 @@ training:
   metric_for_best_model: "eval_loss"  # 用于选择最佳模型的指标
   greater_is_better: false  # 指标是否越大越好（loss越小越好，所以是false）
   save_total_limit: 3  # 最多保存的检查点数量，null表示不限制
+  
+  # 混合精度训练配置
+  bf16: true  # 是否使用 bf16 混合精度训练（推荐，需要 Ampere 及以上架构 GPU）
+  fp16: false  # 是否使用 fp16 混合精度训练（bf16 和 fp16 只能选择一个）
   
   # 其他配置（可选）
   max_samples: null  # 限制训练样本数量，用于快速测试，null表示使用全部数据

@@ -5,7 +5,7 @@ Unsloth LoRA 训练模板
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
 from datasets import load_dataset, Dataset
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import torch
 import os
 import logging
@@ -17,9 +17,19 @@ from dataclasses import dataclass, field
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    encoding='utf-8'
+    handlers=[
+        logging.StreamHandler()  # 输出到控制台
+    ]
 )
 logger = logging.getLogger(__name__)
+# 确保日志输出使用 UTF-8 编码
+import sys
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    import io
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # 尝试导入 unsloth.chat_templates，如果不存在则忽略
 try:
@@ -87,6 +97,8 @@ class TrainingConfig:
     use_chat_template: bool = False  # 是否使用模型的 chat template 处理数据
     messages_field: str = "messages"  # 数据集中包含消息列表的字段名，仅在 use_chat_template=True 时使用
     chat_template_name: Optional[str] = None  # Chat template 名称（用于 unsloth.chat_templates.get_chat_template），None则使用模型默认
+    packing: bool = False  # 是否启用 packing（将多个短序列打包到同一批次以提高训练效率）
+    max_grad_norm: Optional[float] = None  # 梯度裁剪的最大范数，None表示不进行梯度裁剪
 
 
 class UnslothTrainer:
@@ -140,21 +152,33 @@ class UnslothTrainer:
         self.trainer = None
         self._is_loaded = False
         
-    def _resolve_model_path(self) -> str:
-        """解析模型路径，优先使用本地路径"""
+    def _resolve_model_path(self) -> Tuple[str, bool]:
+        """解析模型路径，优先使用本地路径
+        
+        Returns:
+            tuple: (model_path, is_local) - 模型路径和是否为本地路径
+        """
         if os.path.exists(self.model_path) and os.path.exists(
             os.path.join(self.model_path, 'config.json')
         ):
             logger.info(f"使用本地模型: {self.model_path}")
-            return self.model_path
+            return self.model_path, True
         else:
             logger.info(f"本地模型不存在，使用HuggingFace模型: {self.model_path}")
-            return self.model_path
+            return self.model_path, False
     
     def load_model(self):
         """加载模型和分词器，并配置LoRA"""
         try:
-            model_name = self._resolve_model_path()
+            model_name, is_local = self._resolve_model_path()
+            
+            # 如果是本地模型路径，设置 local_files_only=True 以避免从 HuggingFace 下载
+            local_files_only = is_local
+            
+            if local_files_only:
+                logger.info("检测到本地模型，将使用 local_files_only=True 避免网络下载")
+            else:
+                logger.info("使用远程模型，将从 HuggingFace 下载（如果需要）")
             
             logger.info("正在加载基础模型和分词器...")
             self.model, self.tokenizer = FastLanguageModel.from_pretrained(
@@ -164,6 +188,7 @@ class UnslothTrainer:
                 dtype=self.dtype,
                 load_in_4bit=self.load_in_4bit,
                 load_in_8bit=self.load_in_8bit,
+                local_files_only=local_files_only,  # 添加此参数以禁用网络下载
             )
             
             logger.info("正在配置LoRA参数...")
@@ -372,6 +397,10 @@ class UnslothTrainer:
             "report_to": self.training_config.report_to,
         }
         
+        # 添加梯度裁剪配置
+        if self.training_config.max_grad_norm is not None:
+            training_args_dict["max_grad_norm"] = self.training_config.max_grad_norm
+        
         # 添加评估和保存步数配置
         if evaluation_strategy == "steps" and self.training_config.eval_steps is not None:
             training_args_dict["eval_steps"] = self.training_config.eval_steps
@@ -397,6 +426,7 @@ class UnslothTrainer:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             args=training_args,
+            packing=self.training_config.packing,  # 是否启用 packing
         )
         
         logger.info("训练器配置完成")
@@ -609,7 +639,8 @@ def create_training_config_from_dict(config_dict: Dict[str, Any]) -> TrainingCon
         'evaluation_strategy', 'eval_steps', 'save_strategy', 'save_steps',
         'load_best_model_at_end', 'metric_for_best_model', 'greater_is_better',
         'save_total_limit', 'max_samples', 'shuffle_seed',
-        'use_chat_template', 'messages_field', 'chat_template_name'
+        'use_chat_template', 'messages_field', 'chat_template_name',
+        'packing', 'max_grad_norm'
     ]
     for field in optional_fields:
         if field in train_dict:
@@ -632,7 +663,11 @@ def main():
     args = parser.parse_args()
     
     # 从YAML文件加载配置
-    config_dict = load_config_from_yaml(args.config)
+    try:
+        config_dict = load_config_from_yaml(args.config)
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {str(e)}")
+        raise
     
     # 提取基础配置（所有参数都必须从YAML中读取）
     required_base_fields = ['model_path', 'output_path', 'max_seq_length', 'load_in_4bit', 'load_in_8bit', 'device_map']
@@ -640,11 +675,19 @@ def main():
         if field not in config_dict:
             raise ValueError(f"YAML配置文件中缺少必需的基础配置参数: {field}")
     
-    model_path = config_dict['model_path']
-    output_path = config_dict['output_path']
-    max_seq_length = config_dict['max_seq_length']
+    # 验证量化配置的合理性
     load_in_4bit = config_dict['load_in_4bit']
     load_in_8bit = config_dict['load_in_8bit']
+    if load_in_4bit and load_in_8bit:
+        raise ValueError("load_in_4bit 和 load_in_8bit 不能同时为 true，请只选择一个")
+    
+    # 验证 max_seq_length
+    max_seq_length = config_dict['max_seq_length']
+    if not isinstance(max_seq_length, int) or max_seq_length <= 0:
+        raise ValueError(f"max_seq_length 必须是正整数，当前值: {max_seq_length}")
+    
+    model_path = config_dict['model_path']
+    output_path = config_dict['output_path']
     device_map = config_dict['device_map']
     dtype = config_dict.get('dtype')  # dtype是可选的
     
@@ -653,22 +696,35 @@ def main():
     training_config = create_training_config_from_dict(config_dict)
     
     # 创建训练器并执行训练
-    trainer = UnslothTrainer(
-        model_path=model_path,
-        output_path=output_path,
-        max_seq_length=max_seq_length,
-        load_in_4bit=load_in_4bit,
-        load_in_8bit=load_in_8bit,
-        device_map=device_map,
-        dtype=dtype,
-        lora_config=lora_config,
-        training_config=training_config,
-    )
-    
-    # 运行完整训练流程
-    metrics = trainer.run_full_pipeline()
-    
-    logger.info("训练流程完成！")
+    try:
+        trainer = UnslothTrainer(
+            model_path=model_path,
+            output_path=output_path,
+            max_seq_length=max_seq_length,
+            load_in_4bit=load_in_4bit,
+            load_in_8bit=load_in_8bit,
+            device_map=device_map,
+            dtype=dtype,
+            lora_config=lora_config,
+            training_config=training_config,
+        )
+        
+        # 运行完整训练流程
+        logger.info("=" * 60)
+        logger.info("开始执行训练流程")
+        logger.info("=" * 60)
+        metrics = trainer.run_full_pipeline()
+        
+        logger.info("=" * 60)
+        logger.info("训练流程完成！")
+        logger.info("=" * 60)
+    except KeyboardInterrupt:
+        logger.warning("训练被用户中断")
+        raise
+    except Exception as e:
+        logger.error(f"训练过程中发生错误: {str(e)}")
+        logger.exception("详细错误信息:")
+        raise
 
 
 if __name__ == "__main__":

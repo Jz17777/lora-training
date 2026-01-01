@@ -1,0 +1,18 @@
+# LoRA 训练项目依赖项
+# 基础依赖
+torch>=2.0.0
+transformers>=4.35.0
+peft>=0.6.0
+trl>=0.7.0
+datasets>=2.14.0
+accelerate>=0.24.0
+bitsandbytes>=0.41.0
+pyyaml>=6.0
+
+# Unsloth (可选，如果使用 Unsloth 框架)
+# unsloth>=2024.1.0
+
+# 其他工具
+numpy>=1.24.0
+packaging>=21.0
+

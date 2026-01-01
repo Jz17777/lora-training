@@ -11,9 +11,19 @@ from typing import List, Dict, Any, Optional
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    encoding='utf-8'
+    handlers=[
+        logging.StreamHandler()  # 输出到控制台
+    ]
 )
 logger = logging.getLogger(__name__)
+# 确保日志输出使用 UTF-8 编码
+import sys
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    import io
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 
 def format_to_chatml(
@@ -64,60 +74,178 @@ def format_to_chatml(
                 data = json.loads(line)
                 
                 # =============================================================================
-                # TODO: 数据处理逻辑部分
+                # 数据处理逻辑部分
                 # =============================================================================
-                # 请根据实际的数据集格式，在此处添加相应的处理逻辑
-                # 
-                # 目标：将输入数据转换为包含 messages 字段的格式
-                # 输出格式示例：
-                #   {"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
-                #
-                # 处理步骤：
-                # 1. 从 data 中提取对话数据（根据 input_field 或其他字段）
-                # 2. 将对话数据转换为标准的 messages 格式（列表，每个元素包含 role 和 content）
-                # 3. 验证消息格式是否正确
-                # 4. 构建输出数据：{output_field: messages}
-                #
-                # 示例处理逻辑（请根据实际数据集格式修改）：
-                # messages = []
-                # # 根据实际数据格式提取和转换
-                # # ...
-                # output_data = {output_field: messages}
-                # =============================================================================
+                # 支持多种输入格式，转换为标准的 messages 格式
+                messages = None
                 
-                # 占位符：等待添加具体的数据处理逻辑
-                logger.warning(f"第 {line_num} 行：数据处理逻辑尚未实现，请根据数据集格式添加相应的处理代码")
-                logger.warning(f"当前数据示例: {json.dumps(data, ensure_ascii=False)[:200]}...")
-                error_count += 1
-                continue
+                # 情况1: 如果输入数据已经有 messages 字段（标准格式），直接使用
+                if output_field in data and isinstance(data[output_field], list):
+                    messages = data[output_field]
+                elif "messages" in data and isinstance(data["messages"], list):
+                    messages = data["messages"]
                 
-                # =============================================================================
-                # 以下代码在实现处理逻辑后取消注释
-                # =============================================================================
-                # # 验证消息格式
-                # if not isinstance(messages, list) or len(messages) == 0:
-                #     logger.warning(f"第 {line_num} 行没有有效消息，跳过")
-                #     error_count += 1
-                #     continue
-                # 
-                # # 验证每条消息的格式
-                # for i, msg in enumerate(messages):
-                #     if not isinstance(msg, dict):
-                #         logger.warning(f"第 {line_num} 行第 {i+1} 条消息格式不正确，跳过该样本")
-                #         break
-                #     if "role" not in msg or "content" not in msg:
-                #         logger.warning(f"第 {line_num} 行第 {i+1} 条消息缺少 'role' 或 'content' 字段，跳过该样本")
-                #         break
-                # else:
-                #     # 所有消息都验证通过，写入输出文件
-                #     output_data = {output_field: messages}
-                #     f_out.write(json.dumps(output_data, ensure_ascii=False) + "\n")
-                #     processed_count += 1
-                #     
-                #     # 每处理 1000 条记录输出一次进度
-                #     if processed_count % 1000 == 0:
-                #         logger.info(f"已处理 {processed_count} 条记录...")
-                # =============================================================================
+                # 情况2: 如果输入数据有 input_field 指定的字段（如 conversations）
+                elif input_field in data:
+                    conversations = data[input_field]
+                    if isinstance(conversations, list):
+                        messages = []
+                        for item in conversations:
+                            if isinstance(item, dict):
+                                # 如果已经是标准格式（有 role 和 content）
+                                if "role" in item and "content" in item:
+                                    messages.append({
+                                        "role": item["role"],
+                                        "content": item["content"]
+                                    })
+                                # 如果是其他格式，尝试提取
+                                elif "from" in item and "value" in item:
+                                    # 支持类似 {"from": "user", "value": "..."} 格式
+                                    role = item["from"]
+                                    # 将 "human" 转换为 "user"，"gpt" 转换为 "assistant"
+                                    if role == "human":
+                                        role = "user"
+                                    elif role == "gpt" or role == "bot":
+                                        role = "assistant"
+                                    messages.append({
+                                        "role": role,
+                                        "content": item["value"]
+                                    })
+                                elif "speaker" in item and "text" in item:
+                                    # 支持类似 {"speaker": "user", "text": "..."} 格式
+                                    role = item["speaker"]
+                                    if role == "human":
+                                        role = "user"
+                                    elif role == "gpt" or role == "bot":
+                                        role = "assistant"
+                                    messages.append({
+                                        "role": role,
+                                        "content": item["text"]
+                                    })
+                
+                # 情况3: 如果输入数据有 instruction 和 output 字段（单轮对话格式）
+                elif "instruction" in data:
+                    messages = []
+                    if "input" in data and data["input"]:
+                        # 有 input 字段的情况
+                        messages.append({
+                            "role": "user",
+                            "content": f"{data['instruction']}\n{data['input']}"
+                        })
+                    else:
+                        # 只有 instruction 的情况
+                        messages.append({
+                            "role": "user",
+                            "content": data["instruction"]
+                        })
+                    if "output" in data:
+                        messages.append({
+                            "role": "assistant",
+                            "content": data["output"]
+                        })
+                
+                # 情况4: 如果输入数据有 prompt 和 response 字段
+                elif "prompt" in data:
+                    messages = []
+                    messages.append({
+                        "role": "user",
+                        "content": data["prompt"]
+                    })
+                    if "response" in data:
+                        messages.append({
+                            "role": "assistant",
+                            "content": data["response"]
+                        })
+                
+                # 情况5: 如果输入数据有 question 和 answer 字段
+                elif "question" in data:
+                    messages = []
+                    messages.append({
+                        "role": "user",
+                        "content": data["question"]
+                    })
+                    if "answer" in data:
+                        messages.append({
+                            "role": "assistant",
+                            "content": data["answer"]
+                        })
+                
+                # 如果以上都不匹配，尝试从 data 中查找可能的对话字段
+                if messages is None:
+                    # 尝试查找常见的对话字段
+                    possible_fields = ["conversation", "dialogue", "chat", "history", "context"]
+                    for field in possible_fields:
+                        if field in data and isinstance(data[field], list):
+                            # 递归处理，假设这个字段包含对话数据
+                            temp_data = {input_field: data[field]}
+                            # 这里简化处理，假设格式类似 conversations
+                            messages = []
+                            for item in data[field]:
+                                if isinstance(item, dict) and "role" in item and "content" in item:
+                                    messages.append({
+                                        "role": item["role"],
+                                        "content": item["content"]
+                                    })
+                            if messages:
+                                break
+                
+                # 验证消息格式
+                if messages is None or not isinstance(messages, list) or len(messages) == 0:
+                    logger.warning(f"第 {line_num} 行：无法提取有效消息，跳过。数据键: {list(data.keys())[:5]}")
+                    error_count += 1
+                    continue
+                
+                # 验证每条消息的格式
+                valid_messages = []
+                for i, msg in enumerate(messages):
+                    if not isinstance(msg, dict):
+                        logger.warning(f"第 {line_num} 行第 {i+1} 条消息格式不正确（不是字典），跳过该样本")
+                        break
+                    if "role" not in msg or "content" not in msg:
+                        logger.warning(f"第 {line_num} 行第 {i+1} 条消息缺少 'role' 或 'content' 字段，跳过该样本")
+                        break
+                    # 验证并规范化 role 值
+                    role = msg["role"].lower() if isinstance(msg["role"], str) else str(msg["role"]).lower()
+                    # 角色映射：将常见变体转换为标准值
+                    role_mapping = {
+                        "human": "user",
+                        "gpt": "assistant",
+                        "bot": "assistant",
+                        "assistant": "assistant",
+                        "user": "user",
+                        "system": "system",
+                        "ai": "assistant",
+                        "chatgpt": "assistant",
+                    }
+                    if role in role_mapping:
+                        role = role_mapping[role]
+                    elif role not in ["user", "assistant", "system"]:
+                        logger.warning(f"第 {line_num} 行第 {i+1} 条消息的 role 值 '{msg['role']}' 不是标准值（user/assistant/system），将跳过")
+                        break
+                    # 更新 role 为标准值
+                    msg["role"] = role
+                    # 验证 content 是否为空
+                    if not msg["content"] or not str(msg["content"]).strip():
+                        logger.warning(f"第 {line_num} 行第 {i+1} 条消息的 content 为空，跳过该样本")
+                        break
+                    valid_messages.append({
+                        "role": msg["role"],
+                        "content": str(msg["content"]).strip()
+                    })
+                else:
+                    # 所有消息都验证通过，写入输出文件
+                    if len(valid_messages) > 0:
+                        output_data = {output_field: valid_messages}
+                        f_out.write(json.dumps(output_data, ensure_ascii=False) + "\n")
+                        processed_count += 1
+                        
+                        # 每处理 1000 条记录输出一次进度
+                        if processed_count % 1000 == 0:
+                            logger.info(f"已处理 {processed_count} 条记录...")
+                    else:
+                        logger.warning(f"第 {line_num} 行：没有有效消息，跳过")
+                        error_count += 1
+                        continue
             
             except json.JSONDecodeError as e:
                 logger.warning(f"第 {line_num} 行 JSON 解析失败: {str(e)}，跳过")
